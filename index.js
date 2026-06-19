@@ -39,7 +39,7 @@ async function run() {
     });
 
     // Get Task api
-    app.get('/api/task', async(req, res) => {
+    app.get('/api/tasks', async(req, res) => {
         const query = {};
         if(req.query.clientId){
             query.clientId = req.query.clientId;
@@ -53,7 +53,7 @@ async function run() {
     })
 
     // get single task api
-    app.get("/api/tasks/:id",  async (req, res) => {
+    app.get("/api/tasks/:i",  async (req, res) => {
       const { id } = req.params;
       const result = await postTasksCollection.findOne({ _id: new ObjectId(id) });
       res.send(result);
