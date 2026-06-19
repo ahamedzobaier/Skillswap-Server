@@ -53,14 +53,14 @@ async function run() {
     })
 
     // get single task api
-    app.get("/api/tasks/:i",  async (req, res) => {
+    app.get("/api/tasks/:id",  async (req, res) => {
       const { id } = req.params;
       const result = await postTasksCollection.findOne({ _id: new ObjectId(id) });
       res.send(result);
     });
 
     // Post Proposal api
-    app.post('/api/proposals', async(req, res) => {
+    app.post('/api/proposal', async(req, res) => {
       const proposal = req.body;
       const result = await proposalsCollection.insertOne(proposal)
       res.send(result)
