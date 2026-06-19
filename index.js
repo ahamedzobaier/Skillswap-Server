@@ -60,7 +60,7 @@ async function run() {
     });
 
     // Post Proposal api
-    app.post('/api/proposal', async(req, res) => {
+    app.post('/api/proposals', async(req, res) => {
       const proposal = req.body;
       const result = await proposalsCollection.insertOne(proposal)
       res.send(result)
