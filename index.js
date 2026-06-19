@@ -39,7 +39,7 @@ async function run() {
     });
 
     // Get Task api
-    app.get('/api/tasks', async(req, res) => {
+    app.get('/api/task', async(req, res) => {
         const query = {};
         if(req.query.clientId){
             query.clientId = req.query.clientId;
