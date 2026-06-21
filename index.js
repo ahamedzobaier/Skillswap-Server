@@ -150,6 +150,18 @@ async function run() {
                   { task_id: proposal.task_id, _id: { $ne: new ObjectId(id) } },
                   { $set: { status: 'rejected' } }
               );
+              
+              // Mock payment generation for Admin Dashboard
+              const paymentsCollection = db.collection('payments');
+              await paymentsCollection.insertOne({
+                  client_email: req.user.email,
+                  freelancer_email: proposal.freelancer_email,
+                  task_id: proposal.task_id,
+                  amount: proposal.proposed_budget,
+                  transaction_id: "mock_txn_" + Math.random().toString(36).substr(2, 9),
+                  payment_status: "succeeded",
+                  paid_at: new Date()
+              });
           }
       }
       res.send(result);
@@ -168,6 +180,7 @@ async function run() {
     // GET /api/users/:email
     app.get("/api/users/:email", async (req, res) => {
        const result = await usersCollection.findOne({ email: req.params.email });
+       if (!result) return res.status(404).json({ error: "User not found" });
        res.send(result);
     });
     
@@ -189,6 +202,19 @@ async function run() {
             { $set: { isBlocked } }
         );
         res.send(result);
+    });
+
+    // --- PAYMENTS API ---
+    const paymentsCollection = db.collection('payments');
+
+    // GET /api/payments
+    app.get('/api/payments', verifySession, async (req, res) => {
+        const query = {};
+        if (req.query.freelancerEmail) query.freelancer_email = req.query.freelancerEmail;
+        if (req.query.clientEmail) query.client_email = req.query.clientEmail;
+        
+        const payments = await paymentsCollection.find(query).sort({ paid_at: -1 }).toArray();
+        res.send(payments);
     });
 
     // --- REVIEWS API ---
@@ -214,6 +240,19 @@ async function run() {
         
         const result = await reviewsCollection.find(query).toArray();
         res.send(result);
+    });
+
+    // --- ADMIN API ---
+    // GET /api/admin/stats
+    app.get('/api/admin/stats', verifySession, requireRole('admin'), async (req, res) => {
+        const totalUsers = await usersCollection.countDocuments();
+        const totalTasks = await tasksCollection.countDocuments();
+        const activeTasks = await tasksCollection.countDocuments({ status: { $in: ['open', 'In Progress'] } });
+        
+        const payments = await paymentsCollection.find({ payment_status: 'succeeded' }).toArray();
+        const totalRevenue = payments.reduce((acc, curr) => acc + (curr.amount || 0), 0);
+        
+        res.send({ totalUsers, totalTasks, activeTasks, totalRevenue });
     });
 
     await client.db("admin").command({ ping: 1 });
