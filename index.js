@@ -74,7 +74,7 @@ async function run() {
       res.send(result);
     });
     
-    // PUT /api/tasks/:id (Edit task)
+    // PUT /api/tasks/:id (Edit task or submit deliverable)
     app.put("/api/tasks/:id", verifySession, async (req, res) => {
       const { id } = req.params;
       const updates = req.body;
@@ -83,6 +83,17 @@ async function run() {
           { $set: updates }
       );
       res.send(result);
+    });
+
+    // GET /api/tasks/freelancer/:email (Get tasks assigned to a freelancer)
+    app.get("/api/tasks/freelancer/:email", verifySession, requireRole('freelancer'), async (req, res) => {
+      const { email } = req.params;
+      // Find accepted proposals for this freelancer
+      const acceptedProposals = await proposalsCollection.find({ freelancer_email: email, status: 'accepted' }).toArray();
+      const taskIds = acceptedProposals.map(p => new ObjectId(p.task_id));
+      
+      const tasks = await tasksCollection.find({ _id: { $in: taskIds } }).toArray();
+      res.send(tasks);
     });
 
     // DELETE /api/tasks/:id
@@ -168,6 +179,41 @@ async function run() {
            { $set: updates }
        );
        res.send(result);
+    });
+    
+    // PUT /api/users/:email/block (Admin Only)
+    app.put("/api/users/:email/block", verifySession, requireRole('admin'), async (req, res) => {
+        const { isBlocked } = req.body;
+        const result = await usersCollection.updateOne(
+            { email: req.params.email },
+            { $set: { isBlocked } }
+        );
+        res.send(result);
+    });
+
+    // --- REVIEWS API ---
+    const reviewsCollection = db.collection('reviews');
+
+    // POST /api/reviews
+    app.post('/api/reviews', verifySession, requireRole('client'), async(req, res) => {
+        const review = {
+            ...req.body,
+            reviewer_email: req.user.email,
+            created_at: new Date()
+        };
+        const result = await reviewsCollection.insertOne(review);
+        res.send(result);
+    });
+
+    // GET /api/reviews
+    app.get('/api/reviews', async(req, res) => {
+        const { taskId, revieweeEmail } = req.query;
+        const query = {};
+        if (taskId) query.task_id = taskId;
+        if (revieweeEmail) query.reviewee_email = revieweeEmail;
+        
+        const result = await reviewsCollection.find(query).toArray();
+        res.send(result);
     });
 
     await client.db("admin").command({ ping: 1 });

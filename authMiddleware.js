@@ -44,6 +44,10 @@ const verifySession = async (req, res, next) => {
         if (!user) {
             return res.status(401).json({ error: "Unauthorized: User not found" });
         }
+        
+        if (user.isBlocked) {
+            return res.status(403).json({ error: "Forbidden: Your account has been blocked" });
+        }
 
         // Attach user to request
         req.user = user;
