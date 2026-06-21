@@ -49,10 +49,10 @@ async function run() {
 
     // GET /api/tasks (Public)
     app.get('/api/tasks', async(req, res) => {
-        const { search, category, clientId, status, page = 1, limit = 9 } = req.query;
+        const { search, category, clientEmail, status, page = 1, limit = 9 } = req.query;
         
         const query = {};
-        if (clientId) query.clientId = clientId;
+        if (clientEmail) query.client_email = clientEmail;
         if (status) query.status = status;
         if (category && category !== 'All') query.category = category;
         if (search) {
