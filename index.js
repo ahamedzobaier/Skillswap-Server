@@ -2,18 +2,18 @@ const express = require('express');
 const app = express()
 const cors = require('cors')
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+const { verifySession, requireRole } = require('./authMiddleware');
 
-
-app.use(cors())
+app.use(cors({
+    origin: process.env.CLIENT_URL || "http://localhost:3000",
+    credentials: true
+}))
 app.use(express.json())
 require('dotenv').config()
 
 const port = process.env.PORT || 5000
-
-
 const uri = process.env.MONGODB_URI;
 
-// Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -24,76 +24,161 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    // Connect the client to the server	(optional starting in v4.7)
     await client.connect();
 
     const db = client.db('skillswap_db');
-    const postTasksCollection = db.collection('posts');
-    const proposalsCollection = db.collection('proposals')
+    app.locals.db = db; // expose db to middleware
+    
+    const tasksCollection = db.collection('tasks');
+    const proposalsCollection = db.collection('proposals');
+    const usersCollection = db.collection('user'); // Better Auth uses 'user' collection
 
-    // Post Task api
-    app.post('/api/tasks', async (req, res) => {
-      const post = req.body;
-      const result = await postTasksCollection.insertOne(post);
+    // --- TASKS API ---
+
+    // POST /api/tasks (Client only)
+    app.post('/api/tasks', verifySession, requireRole('client'), async (req, res) => {
+      const task = {
+        ...req.body,
+        client_email: req.user.email,
+        status: 'open',
+        createdAt: new Date()
+      };
+      const result = await tasksCollection.insertOne(task);
       res.send(result);
     });
 
-    // Get Task api
+    // GET /api/tasks (Public)
     app.get('/api/tasks', async(req, res) => {
+        const { search, category, clientId, status, page = 1, limit = 9 } = req.query;
+        
         const query = {};
-        if(req.query.clientId){
-            query.clientId = req.query.clientId;
+        if (clientId) query.clientId = clientId;
+        if (status) query.status = status;
+        if (category && category !== 'All') query.category = category;
+        if (search) {
+            query.title = { $regex: search, $options: 'i' };
         }
-        if(req.query.status){
-            query.status = req.query.status;
-        }
-        const cursor = postTasksCollection.find(query);
-        const result = await cursor.toArray();
-        res.send(result);
-    })
 
-    // get single task api
-    app.get("/api/tasks/:id",  async (req, res) => {
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const cursor = tasksCollection.find(query).skip(skip).limit(parseInt(limit)).sort({ createdAt: -1 });
+        const result = await cursor.toArray();
+        const total = await tasksCollection.countDocuments(query);
+        
+        res.send({ tasks: result, total, page: parseInt(page), limit: parseInt(limit) });
+    });
+
+    // GET /api/tasks/:id
+    app.get("/api/tasks/:id", async (req, res) => {
       const { id } = req.params;
-      const result = await postTasksCollection.findOne({ _id: new ObjectId(id) });
+      const result = await tasksCollection.findOne({ _id: new ObjectId(id) });
+      res.send(result);
+    });
+    
+    // PUT /api/tasks/:id (Edit task)
+    app.put("/api/tasks/:id", verifySession, async (req, res) => {
+      const { id } = req.params;
+      const updates = req.body;
+      const result = await tasksCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: updates }
+      );
       res.send(result);
     });
 
-    // Post Proposal api
-    app.post('/api/proposals', async(req, res) => {
-      const proposal = req.body;
-      const result = await proposalsCollection.insertOne(proposal)
-      res.send(result)
-    })
+    // DELETE /api/tasks/:id
+    app.delete("/api/tasks/:id", verifySession, async (req, res) => {
+      const { id } = req.params;
+      const result = await tasksCollection.deleteOne({ _id: new ObjectId(id) });
+      res.send(result);
+    });
 
-    //get proposal api
-    app.get('/api/proposals', async(req, res) => {
-      const query = {};
-        if(req.query.taskId){
-            query.taskId = req.query.taskId;
-        }
-        if(req.query.freelancerEmail){
-            query.freelancerEmail = req.query.freelancerEmail;
-        }
+    // --- PROPOSALS API ---
+
+    // POST /api/proposals (Freelancer only)
+    app.post('/api/proposals', verifySession, requireRole('freelancer'), async(req, res) => {
+      const proposal = {
+          ...req.body,
+          freelancer_email: req.user.email,
+          status: 'pending',
+          submitted_at: new Date()
+      };
+      const result = await proposalsCollection.insertOne(proposal);
+      res.send(result);
+    });
+
+    // GET /api/proposals
+    app.get('/api/proposals', verifySession, async(req, res) => {
+        const { taskId, freelancerEmail } = req.query;
+        const query = {};
+        if(taskId) query.task_id = taskId;
+        if(freelancerEmail) query.freelancer_email = freelancerEmail;
+        
         const cursor = proposalsCollection.find(query);
         const result = await cursor.toArray();
         res.send(result);
-    })
+    });
+    
+    // PUT /api/proposals/:id (Client accept/reject)
+    app.put("/api/proposals/:id", verifySession, async (req, res) => {
+      const { id } = req.params;
+      const { status } = req.body; // 'accepted' or 'rejected'
+      
+      const result = await proposalsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status } }
+      );
+      
+      if (status === 'accepted') {
+          const proposal = await proposalsCollection.findOne({ _id: new ObjectId(id) });
+          if (proposal) {
+              await tasksCollection.updateOne(
+                  { _id: new ObjectId(proposal.task_id) },
+                  { $set: { status: 'In Progress' } }
+              );
+              await proposalsCollection.updateMany(
+                  { task_id: proposal.task_id, _id: { $ne: new ObjectId(id) } },
+                  { $set: { status: 'rejected' } }
+              );
+          }
+      }
+      res.send(result);
+    });
 
-    // Send a ping to confirm a successful connection
+    // --- USERS API ---
+    
+    // GET /api/users
+    app.get("/api/users", async (req, res) => {
+       const query = {};
+       if (req.query.role) query.role = req.query.role;
+       const result = await usersCollection.find(query).toArray();
+       res.send(result);
+    });
+    
+    // GET /api/users/:email
+    app.get("/api/users/:email", async (req, res) => {
+       const result = await usersCollection.findOne({ email: req.params.email });
+       res.send(result);
+    });
+    
+    // PUT /api/users/:email (Update Profile)
+    app.put("/api/users/:email", verifySession, async (req, res) => {
+       const updates = req.body;
+       const result = await usersCollection.updateOne(
+           { email: req.params.email },
+           { $set: updates }
+       );
+       res.send(result);
+    });
+
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } finally {
-    // Ensures that the client will close when you finish/error
-    // await client.close();
   }
 }
 run().catch(console.dir);
 
-
-
 app.get('/', (req, res) => {
-  res.send('Hello World!')
+  res.send('Skillswap Server Running')
 })
 
 app.listen(port, () => {
